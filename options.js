@@ -6,13 +6,38 @@
     const checklistContainer = document.getElementById('siteChecklist');
     console.log('[options] elements:', { input, sendBtn, checklistContainer });
   
-    // Define default supported sites
+    // Define default supported sites with correct selectors
     const defaultSites = [
-      { url: 'claude.ai',                 inputSelector: '[role="textbox"]',      buttonSelector: 'button[type="submit"]'           },
-      { url: 'chatgpt.com',               inputSelector: '#prompt-textarea',       buttonSelector: '#composer-submit-button'         },
-      { url: 'aistudio.google.com/prompts', inputSelector: 'textarea',             buttonSelector: 'button[aria-label="Run"]'        },
-      { url: 'x.com/i/grok',              inputSelector: 'textarea',               buttonSelector: 'button[type="submit"]'           },
-      { url: 'chat.deepseek.com',         inputSelector: 'textarea',               buttonSelector: 'button[type="submit"]'           }
+      {
+        url: 'claude.ai',
+        inputSelector: '.ProseMirror',
+        buttonSelector: 'button[aria-label="Send message"]',
+        enabled: true
+      },
+      {
+        url: 'chatgpt.com',
+        inputSelector: '#prompt-textarea',
+        buttonSelector: '#composer-submit-button',
+        enabled: true
+      },
+      {
+        url: 'aistudio.google.com/prompts',
+        inputSelector: 'textarea',
+        buttonSelector: 'button[aria-label="Run"]',
+        enabled: true
+      },
+      {
+        url: 'x.com/i/grok',
+        inputSelector: 'textarea',
+        buttonSelector: 'button[type="submit"]',
+        enabled: true
+      },
+      {
+        url: 'chat.deepseek.com',
+        inputSelector: 'textarea',
+        buttonSelector: 'button[type="submit"]',
+        enabled: true
+      }
     ];
   
     // Load or initialize sites list with persistence
@@ -20,7 +45,7 @@
       console.log('[options] storage.get returned', sites);
       const initial = sites.length
         ? sites
-        : defaultSites.map(s => ({ ...s, enabled: true }));
+        : defaultSites.map(s => ({ ...s }));
       if (!sites.length) {
         console.log('[options] no stored sites – seeding defaults', initial);
         chrome.storage.local.set({ sites: initial });
@@ -30,7 +55,7 @@
       renderChecklist(initial);
     });
   
-    // Helper to render the checklist
+    // Helper to render the checklist UI
     function renderChecklist(sites) {
       console.log('[options] renderChecklist with sites', sites);
       checklistContainer.innerHTML = '';

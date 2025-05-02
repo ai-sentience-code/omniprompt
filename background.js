@@ -3,100 +3,104 @@
 console.log('[background] service worker loaded');
 
 chrome.runtime.onMessage.addListener(async (msg) => {
-  console.log('[background] onMessage received', msg);
   if (msg.action !== 'submitAll') return;
   console.log('[background] action=submitAll – processing');
 
-  // Load stored sites and migrate chatgpt.com selectors if needed
-  let { sites = [] } = await chrome.storage.local.get('sites');
-  const migrated = sites.map(site => {
-    if (site.url === 'chatgpt.com') {
-      return {
-        ...site,
-        inputSelector: '#prompt-textarea',
-        buttonSelector: '#composer-submit-button'
-      };
-    }
-    return site;
-  });
-  if (JSON.stringify(migrated) !== JSON.stringify(sites)) {
-    console.log('[background] migrating chatgpt.com selectors in storage');
-    await chrome.storage.local.set({ sites: migrated });
-    sites = migrated;
-  }
-  console.log('[background] loaded sites from storage (post-migration)', sites);
-
+  // Load and filter enabled sites
+  const { sites = [] } = await chrome.storage.local.get('sites');
   const enabledSites = sites.filter(s => s.enabled);
   console.log('[background] enabledSites', enabledSites);
-  if (!enabledSites.length) return;
 
-  const allTabs = await chrome.tabs.query({});
-  console.log('[background] all open tabs:', allTabs.map(t => ({ id: t.id, url: t.url })));
-
+  // Process each site sequentially
   for (const site of enabledSites) {
     console.log('[background] processing site', site.url);
-    const matching = allTabs.filter(tab => tab.url && tab.url.includes(site.url));
-    console.log(`[background] matching tabs for ${site.url}`, matching.map(t => t.id));
 
-    for (const tab of matching) {
+    // Only inject into tabs the user has already opened
+    const tabs = await chrome.tabs.query({ url: `*://${site.url}/*` });
+    if (!tabs.length) {
+      console.log(`[background] no open tab for ${site.url}, skipping`);
+      continue;
+    }
+
+    // Inject into each matching tab
+    for (const tab of tabs) {
       console.log('[background] focusing tab', tab.id);
       await chrome.tabs.update(tab.id, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
-      console.log('[background] tab and window focused');
+      await new Promise(r => setTimeout(r, 300));
 
       console.log('[background] injecting into tab', tab.id);
       try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: (promptText, inputSel, buttonSel) => {
-            function wait(ms) { return new Promise(res => setTimeout(res, ms)); }
-            (async () => {
-              // 1) Give the page time to render
-              await wait(500);
+        if (site.url === 'chatgpt.com') {
+          // ChatGPT-specific injection
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (promptText) => {
+              const wait = ms => new Promise(r => setTimeout(r, ms));
+              (async () => {
+                await wait(500);
+                const pm = document.getElementById('prompt-textarea');
+                if (!pm) return console.error('ChatGPT editor not found');
+                pm.focus();
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, promptText);
+                pm.dispatchEvent(new InputEvent('input', { bubbles: true }));
+                await wait(500);
+                const btn = document.querySelector('#composer-submit-button');
+                if (!btn) return console.error('ChatGPT send button not found');
+                btn.click();
+              })();
+            },
+            args: [msg.prompt]
+          });
 
-              // 2) Find and focus the editor
-              const editor = document.querySelector(inputSel);
-              if (!editor) {
-                console.error('❌ Editor not found:', inputSel);
-                return;
-              }
-              editor.click();
-              await wait(50);
-              editor.focus();
+        } else if (site.url === 'claude.ai') {
+          // Claude.ai-specific injection
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (promptText) => {
+              const wait = ms => new Promise(r => setTimeout(r, ms));
+              (async () => {
+                await wait(500);
+                const editor = document.querySelector('.ProseMirror');
+                if (!editor) return console.error('Claude editor not found');
+                editor.focus();
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, promptText);
+                editor.dispatchEvent(new InputEvent('input', { bubbles: true }));
+                await wait(500);
+                const btn = document.querySelector('button[aria-label="Send message"]');
+                if (!btn) return console.error('Claude send button not found');
+                btn.click();
+              })();
+            },
+            args: [msg.prompt]
+          });
 
-              // 3) Insert text via execCommand
-              document.execCommand('selectAll', false, null);
-              document.execCommand('insertText', false, promptText);
-              editor.dispatchEvent(new InputEvent('input', { bubbles: true }));
-
-              // 4) Pause before attempting to send
-              await wait(500);
-
-              // 5) Enable & click the send button
-              const btn = document.querySelector(buttonSel);
-              if (!btn) {
-                console.error('❌ Send button not found:', buttonSel);
-                return;
-              }
-              btn.disabled = false;
-              btn.removeAttribute('disabled');
-              btn.scrollIntoView({ block: 'center' });
-              btn.click();
-
-              // 6) Fallback: simulate Enter key on editor
-              const enterEvent = new KeyboardEvent('keydown', {
-                key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-                bubbles: true, cancelable: true
-              });
-              editor.dispatchEvent(enterEvent);
-            })();
-          },
-          args: [msg.prompt, site.inputSelector, site.buttonSelector]
-        });
-        console.log('[background] injection with delay initiated on tab', tab.id);
+        } else {
+          // Generic fallback injection
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (promptText, inputSel, buttonSel) => {
+              const wait = ms => new Promise(r => setTimeout(r, ms));
+              (async () => {
+                await wait(500);
+                const inp = document.querySelector(inputSel);
+                const btn = document.querySelector(buttonSel);
+                if (inp) inp.value = promptText;
+                if (btn) btn.click();
+              })();
+            },
+            args: [msg.prompt, site.inputSelector, site.buttonSelector]
+          });
+        }
+        console.log('[background] injection succeeded for', site.url);
       } catch (err) {
-        console.error('[background] injection failed on tab', tab.id, err);
+        console.error('[background] injection failed for', site.url, err);
       }
+
+      // Wait a bit before processing the next tab
+      await new Promise(r => setTimeout(r, 1500));
     }
   }
 });
